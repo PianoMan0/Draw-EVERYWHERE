@@ -1,0 +1,130 @@
+(function () {
+  'use strict';
+
+  var existing = document.getElementById('draw-everywhere-host');
+  if (existing) {
+    existing.remove();
+    return;
+  }
+
+  var host = document.createElement('div');
+  host.id = 'draw-everywhere-host';
+  host.style.cssText = 'all:initial;position:fixed;inset:0;z-index:2147483647;pointer-events:none;';
+  document.documentElement.appendChild(host);
+  var root = host.attachShadow ? host.attachShadow({ mode: 'open' }) : host;
+
+  root.innerHTML = '<style>' +
+    '*{box-sizing:border-box}#canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:auto;cursor:crosshair}#panel{position:fixed;top:18px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:7px;padding:8px 10px;background:#18232b;color:#f3f7f8;border:1px solid #42545d;border-radius:12px;box-shadow:0 12px 32px #0006;font:13px/1.2 system-ui,sans-serif;pointer-events:auto;user-select:none}button{height:31px;min-width:31px;padding:0 9px;border:1px solid #52666e;border-radius:7px;background:#26363f;color:inherit;font:inherit;cursor:pointer}button:hover{background:#38505b}button.active{background:#d4f25b;color:#152018;border-color:#d4f25b}button:disabled{opacity:.35;cursor:default}.divider{width:1px;height:25px;background:#53656c;margin:0 2px}label{display:flex;align-items:center;gap:5px;color:#b8c6ca}input[type=color]{width:28px;height:28px;padding:2px;border:1px solid #52666e;border-radius:6px;background:#26363f}input[type=range]{width:78px;accent-color:#d4f25b}.size{min-width:37px;text-align:right;color:#b8c6ca}.hint{color:#91a4aa;margin-left:3px;white-space:nowrap}#close{font-size:16px;color:#ffb4ab}#panel.minimized{width:45px;height:45px;padding:7px;overflow:hidden;border-radius:50%;transform:none;left:auto;right:18px;top:18px}#panel.minimized>*{display:none}#panel.minimized #minimize{display:block;min-width:29px;padding:0;font-size:18px}</style>' +
+    '<canvas id="canvas"></canvas>' +
+    '<div id="panel" role="toolbar" aria-label="Draw Everywhere tools">' +
+    '<button id="pen" class="active" title="Pen (P)">Pen</button>' +
+    '<button id="highlighter" title="Highlighter (H)">Highlight</button>' +
+    '<button id="eraser" title="Erase (E)">Erase</button>' +
+    '<span class="divider"></span><label>Color <input id="color" type="color" value="#d4f25b"></label>' +
+    '<label>Size <input id="size" type="range" min="1" max="80" value="5"><span class="size" id="sizeLabel">5px</span></label>' +
+    '<span class="divider"></span><button id="undo" title="Undo (Ctrl/Cmd+Z)" disabled>Undo</button>' +
+    '<button id="redo" title="Redo (Ctrl/Cmd+Shift+Z)" disabled>Redo</button>' +
+    '<button id="clear" title="Clear the canvas">Clear</button>' +
+    '<button id="download" title="Download drawing as PNG">Save</button>' +
+    '<span class="hint">D to toggle drawing</span><button id="minimize" title="Minimize tools">−</button>' +
+    '<button id="close" title="Close (Esc)">×</button></div>';
+
+  var canvas = root.querySelector('#canvas');
+  var context = canvas.getContext('2d');
+  var panel = root.querySelector('#panel');
+  var color = root.querySelector('#color');
+  var size = root.querySelector('#size');
+  var sizeLabel = root.querySelector('#sizeLabel');
+  var drawing = false;
+  var enabled = true;
+  var tool = 'pen';
+  var history = [];
+  var future = [];
+  var lastPoint;
+
+  function resize() {
+    var image = canvas.width && canvas.height ? context.getImageData(0, 0, canvas.width, canvas.height) : null;
+    var ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(window.innerWidth * ratio);
+    canvas.height = Math.round(window.innerHeight * ratio);
+    canvas.style.width = window.innerWidth + 'px';
+    canvas.style.height = window.innerHeight + 'px';
+    context.setTransform(ratio, 0, 0, ratio, 0, 0);
+    if (image) context.putImageData(image, 0, 0);
+  }
+
+  function snapshot() {
+    history.push(canvas.toDataURL());
+    if (history.length > 30) history.shift();
+    future = [];
+    updateButtons();
+  }
+
+  function restore(data) {
+    var image = new Image();
+    image.onload = function () { context.clearRect(0, 0, window.innerWidth, window.innerHeight); context.drawImage(image, 0, 0, window.innerWidth, window.innerHeight); updateButtons(); };
+    image.src = data;
+  }
+
+  function updateButtons() {
+    root.querySelector('#undo').disabled = !history.length;
+    root.querySelector('#redo').disabled = !future.length;
+  }
+
+  function point(event) { return { x: event.clientX, y: event.clientY }; }
+
+  function start(event) {
+    if (!enabled || event.button !== 0) return;
+    drawing = true;
+    lastPoint = point(event);
+    snapshot();
+    context.beginPath();
+    context.moveTo(lastPoint.x, lastPoint.y);
+  }
+
+  function move(event) {
+    if (!drawing) return;
+    var current = point(event);
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    context.lineWidth = Number(size.value);
+    context.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
+    context.strokeStyle = color.value;
+    context.globalAlpha = tool === 'highlighter' ? 0.22 : 1;
+    context.lineTo(current.x, current.y);
+    context.stroke();
+    context.beginPath();
+    context.moveTo(current.x, current.y);
+    lastPoint = current;
+  }
+
+  function stop() { drawing = false; context.globalAlpha = 1; context.globalCompositeOperation = 'source-over'; }
+  function setTool(next) { tool = next; ['pen', 'highlighter', 'eraser'].forEach(function (name) { root.querySelector('#' + name).classList.toggle('active', name === next); }); }
+
+  canvas.addEventListener('pointerdown', start);
+  canvas.addEventListener('pointermove', move);
+  canvas.addEventListener('pointerup', stop);
+  canvas.addEventListener('pointercancel', stop);
+  window.addEventListener('resize', resize);
+  root.querySelector('#pen').onclick = function () { setTool('pen'); };
+  root.querySelector('#highlighter').onclick = function () { setTool('highlighter'); };
+  root.querySelector('#eraser').onclick = function () { setTool('eraser'); };
+  size.oninput = function () { sizeLabel.textContent = size.value + 'px'; };
+  root.querySelector('#undo').onclick = function () { if (history.length) { future.push(canvas.toDataURL()); restore(history.pop()); } };
+  root.querySelector('#redo').onclick = function () { if (future.length) { history.push(canvas.toDataURL()); restore(future.pop()); } };
+  root.querySelector('#clear').onclick = function () { snapshot(); context.clearRect(0, 0, window.innerWidth, window.innerHeight); };
+  root.querySelector('#download').onclick = function () { var link = document.createElement('a'); link.download = 'draw-everywhere.png'; link.href = canvas.toDataURL('image/png'); link.click(); };
+  root.querySelector('#minimize').onclick = function () { panel.classList.toggle('minimized'); };
+  root.querySelector('#close').onclick = function () { host.remove(); window.removeEventListener('resize', resize); };
+
+  function keydown(event) {
+    if (event.key === 'Escape') { host.remove(); window.removeEventListener('resize', resize); return; }
+    if (event.target && /input|textarea/i.test(event.target.tagName)) return;
+    if (event.key.toLowerCase() === 'd') { enabled = !enabled; canvas.style.pointerEvents = enabled ? 'auto' : 'none'; panel.style.opacity = enabled ? '1' : '.55'; }
+    if (event.key.toLowerCase() === 'p') setTool('pen');
+    if (event.key.toLowerCase() === 'h') setTool('highlighter');
+    if (event.key.toLowerCase() === 'e') setTool('eraser');
+  }
+  window.addEventListener('keydown', keydown);
+  resize();
+}());
